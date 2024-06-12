@@ -22,7 +22,7 @@ mod pat;
 mod path;
 pub(crate) mod unify;
 
-use std::{convert::identity, iter, ops::Index};
+use std::{collections::HashSet, convert::identity, iter, ops::Index};
 
 use chalk_ir::{
     cast::Cast,
@@ -55,6 +55,7 @@ use triomphe::Arc;
 
 use crate::{
     db::HirDatabase,
+    display::HirDisplay,
     error_lifetime, fold_tys,
     infer::{coerce::CoerceMany, unify::InferenceTable},
     lower::ImplTraitLoweringMode,
@@ -827,6 +828,7 @@ impl<'a> InferenceContext<'a> {
                 return_ty,
                 rpits.clone(),
                 fn_placeholders,
+                &mut HashSet::default(),
             );
             let rpits = rpits.skip_binders();
             for (id, _) in rpits.impl_traits.iter() {
@@ -855,6 +857,7 @@ impl<'a> InferenceContext<'a> {
         t: T,
         rpits: Arc<chalk_ir::Binders<crate::ImplTraits>>,
         placeholders: Substitution,
+        seen: &mut HashSet<OpaqueTyId>,
     ) -> T
     where
         T: crate::HasInterner<Interner = Interner> + crate::TypeFoldable<Interner>,
@@ -866,6 +869,10 @@ impl<'a> InferenceContext<'a> {
                     TyKind::OpaqueType(opaque_ty_id, _) => *opaque_ty_id,
                     _ => return ty,
                 };
+                if !seen.insert(opaque_ty_id) {
+                    eprintln!("cycle in inference for type alias {}", &ty.display(self.db),);
+                    return ty;
+                }
                 let idx = match self.db.lookup_intern_impl_trait_id(opaque_ty_id.into()) {
                     ImplTraitId::ReturnTypeImplTrait(_, idx) => idx,
                     ImplTraitId::AssociatedTypeImplTrait(_, idx) => idx,
@@ -884,6 +891,7 @@ impl<'a> InferenceContext<'a> {
                         var_predicate,
                         rpits.clone(),
                         placeholders.clone(),
+                        seen,
                     );
                     self.push_obligation(var_predicate.cast(Interner));
                 }
@@ -980,6 +988,7 @@ impl<'a> InferenceContext<'a> {
                             ty,
                             atpits,
                             alias_placeholders,
+                            &mut HashSet::default(),
                         );
                         return Some((opaque_ty_id, ty));
                     }
